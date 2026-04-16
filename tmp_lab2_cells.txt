@@ -1,0 +1,328 @@
+--- lab_2.ipynb ---
+CELL 2, 14 lines
+from rdkit import Chem
+from rdkit.Chem import rdFingerprintGenerator
+import numpy as np
+import networkx as nx
+import pandas as pd
+import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
+import seaborn as sns
+import pubchempy as pcp
+from rdkit.Chem import rdchem
+from collections import Counter
+import numpy as np
+import umap.umap_ as umap
+
+
+---
+CELL 4, 19 lines
+
+# Establecer ruta de acceso a los datos
+
+name = "NPASSv2.0_structureInfo.txt"
+
+npass = pd.read_csv(name, sep="\t", na_values="n.a.")
+
+# Convertir SMILE a FingerPrint
+morgan_gen = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=1024)
+def smiles_to_fp(smile):
+    mol = Chem.MolFromSmiles(smile)
+    if mol is None:
+        return None
+    fp = morgan_gen.GetFingerprint(mol)
+    return fp
+fps = npass["SMILES"].apply(smiles_to_fp)
+npass["FingerPrint"] = fps
+
+# haha este codigo me da la fp que es el binario con 1024 bits
+---
+CELL 5, 1 lines
+npass
+---
+CELL 6, 14 lines
+#pasar a un grafo el smiles
+def smiles_to_graph(smile):
+    mol = Chem.MolFromSmiles(smile)
+    if mol is None:
+        return None
+    G = nx.Graph()
+    for atom in mol.GetAtoms():
+        G.add_node(atom.GetIdx(),atomic_num=atom.GetAtomicNum(),
+                   is_aromatic=atom.GetIsAromatic(),
+                   atom_symbol=atom.GetSymbol())
+        
+    for bond in mol.GetBonds():
+        G.add_edge(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx(), bond_type=bond.GetBondType())
+    return G, mol
+
+---
+CELL 8, 52 lines
+smile = npass.loc[96229 , "SMILES"]
+G, mol = smiles_to_graph(smile)
+#ver que datos tiene el grafo
+print(G.nodes(data=True))
+print(G.edges(data=True))
+
+# Visualizar el grafo con colores por tipo de átomo
+atom_labels = {atom.GetIdx(): atom.GetSymbol() for atom in mol.GetAtoms()}
+inchikey = npass.loc[96229, "InChIKey"]
+compound = pcp.get_compounds(inchikey, namespace='inchikey')
+
+
+cmap = plt.get_cmap("tab10")  
+
+# asignar un color a cada tipo de átomo
+unique_atoms = sorted(set(atom_labels.values()))
+atom_to_color = {atom: cmap(i % cmap.N) for i, atom in enumerate(unique_atoms)}
+node_colors = [atom_to_color[atom_labels[idx]] for idx in G.nodes()]
+
+
+fig, ax = plt.subplots(figsize=(10, 8))
+pos = nx.spring_layout(G, seed=42)
+nx.draw(
+    G,
+    pos,
+    labels={k: f"{v}" for k, v in atom_labels.items()},
+    with_labels=True,
+    node_color=node_colors,
+    node_size=800,
+    font_weight='bold',
+    font_size=12,
+    edgecolors='black',
+    ax=ax
+)
+
+#titulo con el nombre del compuesto
+ax.set_title(
+    compound[0].synonyms[0] if compound and compound[0].synonyms else (
+        compound[0].iupac_name if compound and compound[0].iupac_name else "No synonym found"
+    ),
+    fontweight='bold',
+    fontsize=16
+)
+
+# leyenda colores por tipo de átomo
+legend_elements = [
+    Patch(facecolor=atom_to_color[atom], edgecolor='black', label=atom)
+    for atom in unique_atoms
+]
+ax.legend(handles=legend_elements, title="Átomos", title_fontsize=13, fontsize=12, loc='upper right', frameon=True)
+
+
+
+---
+CELL 9, 3 lines
+#convertir todos los smiles a grafos
+graphs = npass["SMILES"].apply(smiles_to_graph)
+npass["Graph"] = graphs
+---
+CELL 10, 1 lines
+npass
+---
+CELL 11, 6 lines
+# Listar todos los atributos válidos de BondType
+for attr in dir(rdchem.BondType):
+    if not attr.startswith('_'):  # Ignora atributos internos
+        value = getattr(rdchem.BondType, attr)
+        if isinstance(value, rdchem.BondType):
+            print(f"{attr:15} → internal int: {int(value)}")
+---
+CELL 12, 10 lines
+# crear un diccionario para mapear los tipos de enlace a enteros
+BOND_MAP = {
+    'SINGLE': 1, 'DOUBLE': 2, 'TRIPLE': 3, 'AROMATIC': 12,
+    'QUADRUPLE': 4, 'QUINTUPLE': 5, 'HEXTUPLE': 6,
+    'ONEANDAHALF': 7, 'TWOANDAHALF': 8, 'THREEANDAHALF': 9,
+    'FOURANDAHALF': 10, 'FIVEANDAHALF': 11,
+    'IONIC': 13, 'HYDROGEN': 14, 'THREECENTER': 15,
+    'DATIVEONE': 16, 'DATIVE': 17, 'DATIVEL': 18, 'DATIVER': 19,
+    'OTHER': 20, 'UNSPECIFIED': 0, 'ZERO': 21
+}
+
+---
+CELL 14, 11 lines
+#de la informacion de clarada en la función smiles_to_graph se pueden obtener las siguientes funciones
+# información de los nodos (tipo de átomo, si es aromático)
+def initial_node_label(G, v):
+        a = G.nodes[v]
+        return f"{a['atomic_num']}{'A' if a.get('is_aromatic') else ''}"
+
+# información de las aristas (tipo de enlace) de el diccionario BOND_MAP
+def bond_label(edge_data):
+    bt = edge_data.get('bond_type')
+    name = getattr(bt, 'name', str(bt))
+    return BOND_MAP.get(name, BOND_MAP['OTHER'])
+
+---
+CELL 15, 12 lines
+# función de actualización de etiquetas que considera los tipos de enlace el algoritmo de Weisfeiler-Lehman 1 sola iteracion
+def wl_con_edges(G, labels):
+    new_labels = {}
+    for v in G.nodes():
+        neigh_sig = []
+        for u in G.neighbors(v):
+            el = bond_label(G[v][u])    
+            nl = labels[u]               
+            neigh_sig.append((el, nl))   
+        neigh_sig.sort()
+        new_labels[v] = (labels[v], tuple(neigh_sig))  
+    return new_labels
+
+---
+CELL 16, 10 lines
+
+#  Etiquetas WL por niveles va a llamando a wl_con_edges que hace una iteracion
+def wl_labels(G, h=2):
+    labels = {v: initial_node_label(G, v) for v in G.nodes()}
+    all_label_multisets = [list(labels.values())] 
+    for _ in range(h):
+        labels = wl_con_edges(G, labels)
+        all_label_multisets.append(list(labels.values()))
+    return all_label_multisets
+
+
+---
+CELL 17, 3 lines
+#ejemolplo de uso de labels o la lsiata de labels 
+label= wl_labels(G, h=2)
+label
+---
+CELL 18, 7 lines
+#fucnion para convertir las etiquetas wl a un contador de etiquetas
+def wl_vector(G, h=2):
+    labels_by_level = wl_labels(G, h=h)  
+    fp = Counter()
+    for labels in labels_by_level:
+        fp.update(labels)
+    return fp
+
+---
+CELL 19, 4 lines
+fp = wl_vector(G, h=2)
+labels = [str(label) for label in fp.keys()]
+counts = list(fp.values())
+fp
+---
+CELL 20, 7 lines
+plt.figure(figsize=(10,5))
+plt.bar(labels, counts)
+plt.xticks(rotation=90)
+plt.xlabel("Etiqueta WL")
+plt.ylabel("Frecuencia")
+plt.title("Histograma de etiquetas WL en el grafo")
+plt.show()
+---
+CELL 21, 16 lines
+
+def tanimoto_conteo(fp1: Counter, fp2: Counter) -> float:
+    if not fp1 and not fp2:
+        return 1.0
+    keys = set(fp1) | set(fp2) # todas las labels de ambos grafos
+    dot   = sum(fp1.get(k, 0.0) * fp2.get(k, 0.0) for k in keys) # producto punto de los vectores de frecuesncia 
+    norm1 = sum(v*v for v in fp1.values()) # norma al cuadrado del primer vector
+    norm2 = sum(v*v for v in fp2.values()) # norma al cuadrado del segundo vector
+    denom = norm1 + norm2 - dot
+    return 0.0 if denom == 0 else float(dot / denom)
+
+#función para llamaor a todo wrapear directo
+def wl_tanimoto(G1, G2, h=2):
+    fp1 = wl_vector(G1, h=h)
+    fp2 = wl_vector(G2, h=h)
+    return tanimoto_conteo(fp1, fp2)
+
+---
+CELL 22, 4 lines
+g1 = npass.loc[0, "Graph"][0]
+g2 = npass.loc[1, "Graph"][0]
+
+wl_tanimoto(g1, g2, h=2)
+---
+CELL 23, 1 lines
+npass["Graph"].isnull().sum()
+
+---
+CELL 24, 1 lines
+npass = npass.dropna(subset=["Graph"])
+
+---
+CELL 25, 2 lines
+#seleccionar 1000 aleatoria filas para hacer la matriz de similitud
+subset = npass.sample(1000, random_state=42).reset_index(drop=True)
+---
+CELL 26, 1 lines
+subset
+---
+CELL 27, 20 lines
+
+
+matriz_similitud = np.zeros((len(subset), len(subset)))
+
+for i in range(len(subset)):
+    g1 = subset.iloc[i]["Graph"]
+    if isinstance(g1, (list, tuple)): 
+        g1 = g1[0]
+    for j in range(i, len(subset)):
+        g2 = subset.iloc[j]["Graph"]
+        if isinstance(g2, (list, tuple)): 
+            g2 = g2[0]
+
+        if g1 is None or g2 is None:
+            sim = np.nan   # o 0.0 si prefieres
+        else:
+            sim = wl_tanimoto(g1, g2, h=2)
+
+        matriz_similitud[i, j] = sim
+        matriz_similitud[j, i] = sim
+
+---
+CELL 28, 9 lines
+#construir la matriz de la medida de similitud entre los compuestos 
+matriz_similitud = np.zeros((len(subset), len(subset)))
+for i in range(len(subset)):
+    g1 = subset.loc[i, "Graph"][0]
+    for j in range(i, len(subset)):
+        g2 = subset.loc[j, "Graph"][0]
+        sim = wl_tanimoto(g1, g2, h=2)
+        matriz_similitud[i, j] = sim
+        matriz_similitud[j, i] = sim  # La matriz es simétrica
+---
+CELL 29, 1 lines
+matriz_similitud
+---
+CELL 30, 1 lines
+np.isnan(matriz_similitud).sum()
+---
+CELL 31, 1 lines
+pd.DataFrame(matriz_similitud).to_csv("matriz_similitud_wl3.csv", index=False)
+---
+CELL 32, 5 lines
+D = 1 - matriz_similitud
+Y = umap.UMAP(n_components=2, metric='precomputed', random_state=0).fit_transform(D)
+
+plt.scatter(Y[:,0], Y[:,1], s=12)
+plt.xlabel("UMAP-1"); plt.ylabel("UMAP-2"); plt.title("UMAP from similarity"); plt.show()
+---
+--- lab2pt2.ipynb ---
+CELL 0, 6 lines
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+matriz_similitud = pd.read_csv('matriz_similitud_wl.csv')
+D = 1 - matriz_similitud
+
+---
+CELL 1, 8 lines
+
+import umap.umap_ as umap
+import matplotlib.pyplot as plt
+
+Y = umap.UMAP(n_components=2, metric='precomputed', random_state=0).fit_transform(D)
+
+plt.scatter(Y[:,0], Y[:,1], s=12)
+plt.xlabel("UMAP-1"); plt.ylabel("UMAP-2"); plt.title("UMAP from similarity"); plt.show()
+---
+CELL 2, 0 lines
+
+---

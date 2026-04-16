@@ -1,0 +1,169 @@
+\documentclass[12pt]{article}
+
+\usepackage[spanish]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{setspace}
+\geometry{margin=2.5cm}
+
+\title{An\'alisis Topol\'ogico de Datos Moleculares mediante el Algoritmo MAPPER}
+\author{Nuria Arroyo Bustamante}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\onehalfspacing
+
+%------------------------------------------------
+\section{Introducci\'on}
+
+En este trabajo se busca entender cómo se organiza un conjunto de moléculas usando el algoritmo MAPPER. La idea no es solo agrupar datos como en clustering tradicional, sino ver también la estructura general del espacio, es decir, cómo se conectan las regiones y si hay transiciones entre distintos tipos de moléculas.
+
+Para lograr esto, se armó un pipeline que empieza con representaciones en formato SMILES, pasa a grafos moleculares, construye una medida de similitud estructural con Weisfeiler--Lehman y de ahí obtiene una matriz de distancias. Sobre ese espacio se hace primero una visualización con UMAP y luego se construye el grafo MAPPER usando excentricidad como filtro.
+
+%------------------------------------------------
+\section{Descripci\'on de los datos}
+
+Los datos vienen del archivo \texttt{NPASSv2.0\_structureInfo.txt}, que contiene distintas moléculas con varios identificadores. Primero se cargan todos los registros y luego se eliminan aquellos que no tienen SMILES, ya que no permiten reconstruir la estructura.
+
+Para poder trabajar de forma práctica, se toma una muestra aleatoria de 1000 moléculas con semilla fija.
+
+Cada fila corresponde a una molécula. Aunque el archivo original tiene varias columnas, aquí lo importante es la estructura química, ya que todo el análisis gira alrededor de eso.
+
+Se usan:
+\begin{itemize}
+    \item \texttt{SMILES}: representación base de la molécula.
+    \item \texttt{Graph}: grafo construido a partir del SMILES.
+\end{itemize}
+
+Se descarta el resto porque no aporta directamente a la similitud estructural.
+
+%------------------------------------------------
+\section{Construcci\'on del espacio m\'etrico}
+
+\subsection{Representaci\'on molecular}
+
+Cada molécula se convierte en un grafo usando RDKit. Los nodos representan átomos y las aristas enlaces. Además, se guarda información básica como número atómico y aromaticidad.
+
+\subsection{Medida de similitud}
+
+La similitud se calcula usando el esquema de Weisfeiler--Lehman. Se asignan etiquetas a los nodos y se actualizan durante dos iteraciones usando la información de los vecinos. Al final, cada molécula queda representada por un vector de etiquetas.
+
+La similitud entre dos moléculas se calcula con Tanimoto sobre estos vectores.
+
+\subsection{Definici\'on de distancia}
+
+La distancia se define como:
+
+\[
+d(i,j) = 1 - s(i,j)
+\]
+
+Con esto se obtiene una matriz de distancias de tamaño $1000 \times 1000$. Esto permite ver el dataset como una nube de puntos en un espacio métrico, que es justo lo que se necesita para aplicar MAPPER.
+
+%------------------------------------------------
+\section{Visualizaci\'on previa de los datos}
+
+Los datos se interpretan como puntos con una distancia entre ellos. Como no están en un espacio euclidiano sencillo, se usa UMAP con métrica precomputed para obtener una proyección en dos dimensiones.
+
+Esta visualización ayuda a tener una idea general de cómo están distribuidas las moléculas, aunque no sustituye el análisis topológico.
+
+Se conserva la estructura de distancias y se pierde detalle fino al reducir dimensiones.
+
+%------------------------------------------------
+\section{Funci\'on filtro}
+
+Se usa excentricidad media:
+
+\[
+f(x_i) = \frac{1}{n} \sum_{j=1}^{n} d(x_i, x_j)
+\]
+
+Esto mide qué tan lejos está cada molécula del resto. Valores bajos indican puntos más centrales y valores altos puntos más perifericos.
+
+La idea aquí es ordenar el dataset antes de aplicar MAPPER. Esto permite construir una cubierta del espacio basada en esa organización.
+
+%------------------------------------------------
+\section{Par\'ametros de la cubierta}
+
+El rango del filtro se divide en 5 intervalos con 10\% de traslape.
+
+Esto controla qué tan fino es el análisis y qué tanto se conectan los clusters. Más intervalos darían más detalle, pero también más fragmentación.
+
+%------------------------------------------------
+\section{Clustering}
+
+Se trabaja directamente con la matriz de distancias.
+
+Se probaron tres enfoques:
+
+\begin{itemize}
+    \item Aglomerativo: fuerza una partición en cada intervalo.
+    \item DBSCAN: detecta grupos solo si hay densidad suficiente.
+    \item KeplerMapper: usa UMAP para agrupar.
+\end{itemize}
+
+Esto permite ver cómo cambia la estructura dependiendo del método.
+
+Los clusters dentro de cada intervalo se pueden ver como aproximaciones de componentes conexas.
+
+%------------------------------------------------
+\section{Construcci\'on del grafo MAPPER}
+
+El proceso es:
+
+\begin{enumerate}
+    \item evaluar el filtro
+    \item dividir en intervalos
+    \item clusterizar en cada intervalo
+    \item conectar clusters que comparten puntos
+\end{enumerate}
+
+Esto construye un grafo donde cada nodo es un grupo y las conexiones indican traslape.
+
+\subsection{Conexión con el Teorema del Nervio}
+
+Esta construcción se puede entender como una versión discreta del teorema del nervio. Los intervalos generan una cubierta y los clusters representan regiones locales. Al conectar intersecciones, el grafo refleja la estructura global del espacio.
+
+%------------------------------------------------
+\section{An\'alisis del resultado}
+
+Los resultados muestran estructuras distintas dependiendo del método.
+
+El aglomerativo conecta todo en una sola componente, mientras que DBSCAN genera varias componentes separadas.
+
+Esto sugiere que el espacio tiene tanto continuidad como regiones más compactas.
+
+En KeplerMapper aparecen más nodos, lo que da una vista más detallada pero también depende de la proyección.
+
+Los nodos grandes indican regiones densas del espacio, mientras que los pequeños podrían representar estructuras más raras.
+
+%------------------------------------------------
+\section{Identificaci\'on de subgrupos}
+
+Se observan dos escalas:
+
+una global donde todo está conectado  
+y otra local donde aparecen subgrupos
+
+Esto muestra que el resultado depende de la resolución.
+
+%------------------------------------------------
+\section{Conclusiones}
+
+MAPPER permitió ver cómo se organiza el espacio químico de forma más rica que solo clustering.
+
+El resultado depende mucho de las decisiones que se toman, especialmente del clustering.
+
+Esto no es un problema, más bien muestra distintas perspectivas del mismo dataset.
+
+En general, el ejercicio sirvio para entender cómo interactúan todas las partes del pipeline.
+
+Como siguiente paso, seria bueno incorporar información adicional para interpretar mejor los grupos desde el punto de vista químico.
+
+\end{document}

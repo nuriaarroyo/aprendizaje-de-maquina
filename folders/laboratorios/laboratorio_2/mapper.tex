@@ -1,0 +1,329 @@
+\documentclass[12pt]{article}
+
+\usepackage[spanish]{babel}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath, amssymb}
+\usepackage{graphicx}
+\usepackage{geometry}
+\usepackage{setspace}
+\geometry{margin=2.5cm}
+
+\title{An\'alisis Topol\'ogico de Datos Moleculares mediante el Algoritmo MAPPER}
+\author{Nuria Arroyo Bustamante}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\onehalfspacing
+
+%------------------------------------------------
+\section{Introducci\'on}
+
+El objetivo de este trabajo es analizar la estructura topol\'ogica de un conjunto de mol\'eculas utilizando el algoritmo MAPPER. A diferencia de m\'etodos tradicionales de clustering, el enfoque topol\'ogico permite capturar no solo agrupamientos locales, sino tambi\'en la organizaci\'on global del espacio de datos, incluyendo conexiones, regiones intermedias y posibles transiciones entre familias moleculares.
+
+Para ello se construy\'o un pipeline computacional que parte de representaciones moleculares en formato SMILES, las transforma en grafos qu\'imicos, calcula una medida de similitud estructural mediante el esquema de Weisfeiler--Lehman y, a partir de ella, genera una matriz de distancias. Sobre ese espacio m\'etrico se haceuna visualizaci\'on previa con UMAP y posteriormente se construye el grafo MAPPER usando una funci\'on filtro basada en excentricidad.
+
+%------------------------------------------------
+\section{Descripci\'on de los datos}
+
+El conjunto de datos proviene del archivo \texttt{NPASSv2.0\_structureInfo.txt}, que contiene compuestos moleculares descritos mediante diferentes identificadores qu\'imicos. En el pipeline se cargan todos los registros disponibles y posteriormente se eliminan las observaciones con valores faltantes en la columna \texttt{SMILES}. Para hacer manejable el c\'alculo de la matriz de similitud, se selecciona una muestra aleatoria de 1000 mol\'eculas con semilla fija (\texttt{random\_state=42}).
+
+Cada observaci\'on corresponde a una mol\'ecula individual. Aunque el archivo original contiene varios campos descriptivos, el an\'alisis topol\'ogico se apoya principalmente en la estructura qu\'imica codificada por los SMILES, ya que a partir de ella se construyen los grafos moleculares.
+
+Se consideran las siguientes variables:
+\begin{itemize}
+    \item \texttt{SMILES}: representaci\'on en texto plano de la estructura molecular; es la variable principal del pipeline.
+    \item \texttt{Graph}: variable derivada construida en el preprocesamiento, donde cada mol\'ecula se representa como un grafo no dirigido.
+\end{itemize}
+
+Se descartan:
+\begin{itemize}
+    \item Registros con \texttt{SMILES} faltante, porque no permiten reconstruir la estructura molecular.
+    \item Las dem\'as columnas del archivo original, ya que no intervienen en la definici\'on de la similitud estructural utilizada en este an\'alisis.
+\end{itemize}
+
+%------------------------------------------------
+\section{Construcci\'on del espacio m\'etrico}
+
+\subsection{Representaci\'on molecular}
+
+Cada mol\'ecula se representa como un grafo, donde los nodos corresponden a \'atomos y las aristas a enlaces qu\'imicos. Esta construcci\'on se hacecon RDKit a partir de la cadena SMILES. En cada nodo se conserva informaci\'on b\'asica del \'atomo, en particular su n\'umero at\'omico, su s\'imbolo qu\'imico y si pertenece o no a un sistema arom\'atico. En cada arista se registra el tipo de enlace.
+
+\subsection{Medida de similitud}
+
+La similitud estructural entre mol\'eculas se define mediante una versi\'on del esquema de Weisfeiler--Lehman (WL) aplicada a grafos moleculares. Primero se asigna a cada nodo una etiqueta inicial basada en el n\'umero at\'omico y la aromaticidad. Luego, durante dos iteraciones ($h=2$), cada etiqueta se actualiza agregando la informaci\'on de las etiquetas vecinas junto con el tipo de enlace correspondiente.
+
+Las etiquetas obtenidas a lo largo de todos los niveles se acumulan en un vector tipo bolsa de caracter\'isticas para cada mol\'ecula. Finalmente, la similitud entre dos vectores WL se calcula mediante un coeficiente de Tanimoto para conteos, lo que produce una medida de similitud estructural entre pares de mol\'eculas.
+
+\subsection{Definici\'on de distancia}
+
+A partir de la similitud, se define la distancia como:
+
+\[
+d(i,j) = 1 - s(i,j)
+\]
+
+En el pipeline se calcula primero la matriz de similitud WL y despu\'es se transforma en una matriz de distancias mediante la expresi\'on anterior. As\'i, se obtiene una matriz cuadrada de tama\~no $1000 \times 1000$ que dota al subconjunto analizado de una estructura de espacio m\'etrico finito.
+
+Esta construcción permite interpretar el conjunto de datos como una nube de puntos en un espacio métrico finito, lo cual es el punto de partida para la aplicación de técnicas de análisis topológico de datos.
+
+%------------------------------------------------
+\section{Visualizaci\'on previa de los datos}
+
+El conjunto de datos se interpreta como una nube de puntos en un espacio m\'etrico definido por la matriz de distancias precomputada. Como esta representaci\'on no vive naturalmente en un espacio euclidiano de baja dimensi\'on, se utiliz\'o UMAP con m\'etrica \texttt{precomputed} para obtener una proyecci\'on bidimensional.
+
+Esta visualizaci\'on no sustituye el an\'alisis topol\'ogico, pero permite inspeccionar de forma preliminar la distribuci\'on global de las mol\'eculas y detectar posibles regiones densas o transiciones entre grupos.
+
+Se conserva:
+\begin{itemize}
+    \item La geometr\'ia inducida por la matriz de distancias WL.
+    \item La proximidad relativa entre mol\'eculas estructuralmente similares.
+\end{itemize}
+
+Se descarta:
+\begin{itemize}
+    \item Parte del detalle fino de alta dimensi\'on al proyectar los datos a dos dimensiones.
+    \item La interpretaci\'on directa de coordenadas qu\'imicas originales, ya que la visualizaci\'on depende solo de las distancias estructurales.
+\end{itemize}
+
+%------------------------------------------------
+\section{Funci\'on filtro}
+
+\subsection{Definici\'on}
+
+Se utiliza la excentricidad media como funci\'on filtro, definida como:
+
+\[
+f(x_i) = \frac{1}{n} \sum_{j=1}^{n} d(x_i, x_j)
+\]
+
+\subsection{Interpretaci\'on}
+
+Esta funci\'on mide qu\'e tan lejos se encuentra, en promedio, una mol\'ecula con respecto al resto del conjunto. Valores bajos corresponden a mol\'eculas m\'as centrales dentro del espacio qu\'imico definido por la distancia WL, mientras que valores altos indican mol\'eculas m\'as perif\'ericas o at\'ipicas.
+
+\subsection{Justificaci\'on}
+
+La excentricidad media es una elecci\'on natural para el algoritmo MAPPER porque resume la posici\'on relativa de cada observaci\'on dentro del conjunto total sin depender de una representaci\'on euclidiana expl\'icita. En este problema resulta adecuada porque el inter\'es principal no es solo identificar grupos aislados, sino ordenar las mol\'eculas seg\'un su cercan\'ia promedio al resto del espacio qu\'imico y usar esa organizaci\'on global para construir la cubierta del filtro.
+
+En términos topológicos, esta función induce una organización del espacio que posteriormente será utilizada para construir una cubierta del conjunto de datos.
+
+
+%------------------------------------------------
+\section{Par\'ametros de la cubierta}
+
+El rango del filtro se divide en intervalos traslapados a partir de los valores observados de excentricidad media. En el subconjunto analizado, el rango del filtro fue:
+
+\[
+f(x_i) \in [0.4484,\ 0.9990]
+\]
+
+Se utiliz\'o una cubierta uniforme sobre este intervalo.
+
+\begin{itemize}
+    \item N\'umero de intervalos: $5$
+    \item Porcentaje de traslape: $10\%$
+\end{itemize}
+
+Los intervalos obtenidos fueron aproximadamente:
+
+\begin{itemize}
+    \item $[0.4484,\ 0.5695]$
+    \item $[0.5475,\ 0.6686]$
+    \item $[0.6466,\ 0.7677]$
+    \item $[0.7457,\ 0.8668]$
+    \item $[0.8448,\ 0.9660]$
+\end{itemize}
+
+Estos par\'ametros controlan la resoluci\'on y la conectividad del grafo resultante. Un n\'umero mayor de intervalos producir\'ia una descripci\'on m\'as fina del espacio, mientras que un traslape mayor incrementar\'ia la probabilidad de que aparezcan conexiones entre clusters de intervalos consecutivos.
+
+
+%------------------------------------------------
+\section{Clustering}
+
+\subsection{M\'etrica}
+
+Se utiliza la matriz de distancias precomputada como entrada del algoritmo de clustering en las versiones manuales del Mapper. Esto permite que el agrupamiento se base directamente en la similitud estructural inducida por la distancia WL, sin imponer una geometr\'ia euclidiana artificial.
+
+\subsection{M\'etodo}
+
+Con el fin de entender mejor el efecto del m\'etodo de agrupamiento sobre la topolog\'ia observada, se probaron tres variantes:
+
+\begin{itemize}
+    \item \textbf{Mapper manual con clustering aglomerativo}: dentro de cada intervalo se aplic\'o \texttt{AgglomerativeClustering} con distancia precomputada y ligamiento promedio.
+    \item \textbf{Mapper manual con DBSCAN}: dentro de cada intervalo se aplic\'o \texttt{DBSCAN} con distancia precomputada.
+    \item \textbf{KeplerMapper}: se utiliz\'o la librer\'ia \texttt{kmapper}, tambi\'en con DBSCAN, pero agrupando sobre la proyecci\'on bidimensional obtenida con UMAP en lugar de usar directamente la matriz de distancias original como espacio de clustering.
+\end{itemize}
+
+\subsection{Par\'ametros}
+
+\paragraph{Versi\'on manual con clustering aglomerativo.}
+\begin{itemize}
+    \item N\'umero de clusters por intervalo: $3$
+    \item M\'etrica: \texttt{precomputed}
+    \item Ligamiento: \texttt{average}
+\end{itemize}
+
+\paragraph{Versi\'on manual con DBSCAN.}
+\begin{itemize}
+    \item $\epsilon = 0.35$
+    \item \texttt{min\_samples} $= 3$
+    \item M\'etrica: \texttt{precomputed}
+\end{itemize}
+
+\paragraph{Versi\'on con KeplerMapper.}
+\begin{itemize}
+    \item N\'umero de cubos: $5$
+    \item Traslape: $10\%$
+    \item Clusterer: \texttt{DBSCAN} con $\epsilon = 0.5$ y \texttt{min\_samples} $= 3$
+    \item Espacio de clustering: proyecci\'on UMAP en dos dimensiones
+\end{itemize}
+
+\subsection{Justificaci\'on}
+
+La comparaci\'on entre m\'etodos se consider\'o parte del aprendizaje del ejercicio. La versi\'on aglomerativa resulta \'util para construir una descripci\'on global y conectada del espacio de datos, ya que fuerza una partici\'on en cada intervalo. En cambio, DBSCAN es m\'as conservador: solo genera clusters cuando detecta densidad local suficiente y puede dejar regiones sin agrupar. Finalmente, la versi\'on con KeplerMapper permite una visualizaci\'on interactiva m\'as rica, aunque ya no agrupa directamente en el espacio original de distancias, sino en una proyecci\'on bidimensional derivada de UMAP.
+
+En este contexto, los clusters obtenidos dentro de cada intervalo pueden interpretarse como aproximaciones discretas de las componentes conexas de los subconjuntos inducidos por la cubierta del filtro.
+
+%------------------------------------------------
+\section{Construcci\'on del grafo MAPPER}
+
+El algoritmo MAPPER se implement\'o de la siguiente manera:
+
+\begin{enumerate}
+    \item Se eval\'ua la funci\'on filtro sobre cada observaci\'on.
+    \item Se divide el rango del filtro en intervalos traslapados.
+    \item Se aplica clustering dentro de cada intervalo.
+    \item Se construye un grafo donde:
+    \begin{itemize}
+        \item Cada nodo representa un cluster.
+        \item Se conectan nodos si comparten elementos.
+    \end{itemize}
+\end{enumerate}
+
+En las implementaciones manuales, esta construcci\'on se realiz\'o expl\'icitamente sobre la matriz de distancias WL. Por tanto, la topolog\'ia obtenida depende de dos decisiones separadas:
+
+\begin{itemize}
+    \item la organizaci\'on global inducida por el filtro de excentricidad;
+    \item la forma en que cada algoritmo de clustering separa o conecta observaciones dentro de cada intervalo.
+\end{itemize}
+
+Esto es importante porque dos elecciones distintas de clustering pueden producir grafos con conectividad muy diferente aun cuando la cubierta y la funci\'on filtro sean las mismas.
+
+\subsection{Conexión con el Teorema del Nervio}
+
+La construcción del grafo MAPPER puede interpretarse como una aproximación discreta del teorema del nervio. En efecto, la función filtro induce una cubierta del conjunto de datos a través de intervalos traslapados de su rango, y cada uno de estos intervalos define un subconjunto de observaciones mediante su preimagen.
+
+Dentro de cada subconjunto, el uso de clustering permite aproximar sus componentes conexas, de modo que cada cluster puede entenderse como una región local del espacio de datos. El grafo final se construye conectando aquellos clusters que comparten elementos, lo cual refleja la intersección entre subconjuntos de la cubierta.
+
+De esta forma, el grafo MAPPER puede interpretarse como el nervio de una cubierta inducida por la función filtro, proporcionando una representación de la estructura global del espacio de datos a partir de información local.
+
+%------------------------------------------------
+\section{An\'alisis del resultado}
+
+\subsection{Estructura global}
+
+Los resultados observados fueron los siguientes:
+
+\begin{itemize}
+    \item \textbf{Mapper manual + aglomerativo}: $15$ nodos, $16$ aristas y $1$ componente conexa.
+    \item \textbf{Mapper manual + DBSCAN}: $10$ nodos, $6$ aristas y $4$ componentes conexas.
+    \item \textbf{KeplerMapper + DBSCAN}: $35$ nodos y $22$ aristas.
+\end{itemize}
+
+Adem\'as, en la versi\'on manual con clustering aglomerativo se obtuvo exactamente la misma partici\'on por intervalo:
+
+\[
+[3,\ 3,\ 3,\ 3,\ 3]
+\]
+
+es decir, tres clusters por cada uno de los cinco intervalos. En cambio, en la versi\'on manual con DBSCAN se observ\'o una distribuci\'on desigual:
+
+\[
+[1,\ 1,\ 3,\ 4,\ 1]
+\]
+
+lo que muestra que el algoritmo no fuerza una misma cantidad de agrupamientos en todos los intervalos, sino que responde a la densidad local observada en cada regi\'on del filtro.
+
+\subsection{Interpretaci\'on}
+
+La diferencia entre resultados no debe interpretarse como una contradicci\'on, sino como evidencia de que el espacio molecular admite m\'ultiples lecturas seg\'un el criterio de agrupamiento.
+
+\begin{itemize}
+    \item En la \textbf{versi\'on manual con aglomerativo}, la aparici\'on de una sola componente conexa sugiere una organizaci\'on global continua del espacio qu\'imico: hay transiciones entre intervalos y el algoritmo tiende a conectar regiones que, bajo una partici\'on forzada, quedan enlazadas mediante elementos compartidos.
+    \item En la \textbf{versi\'on manual con DBSCAN}, la aparici\'on de cuatro componentes indica una lectura m\'as local y m\'as estricta del espacio de similitud. En este caso, el algoritmo s\'olo conserva grupos suficientemente densos y deja fuera regiones menos compactas, por lo que la conectividad disminuye.
+    \item En \textbf{KeplerMapper}, el n\'umero mayor de nodos sugiere una descripci\'on m\'as fina de la estructura. Sin embargo, esta versi\'on no es directamente comparable con las dos manuales, porque el clustering no se haceen el espacio original de distancias, sino sobre la proyecci\'on UMAP en dos dimensiones.
+\end{itemize}
+
+Por ello, lo que se observa en los grafos no son necesariamente ``familias qu\'imicas'' en sentido estricto, sino agrupamientos de mol\'eculas que resultan similares bajo la m\'etrica estructural definida por Weisfeiler--Lehman y Tanimoto para conteos.
+
+La interpretaci\'on m\'as prudente es la siguiente:
+\begin{itemize}
+    \item los \textbf{nodos} representan subconjuntos de mol\'eculas con cercan\'ia estructural relativa bajo la distancia elegida;
+    \item las \textbf{aristas} representan continuidad entre subconjuntos a trav\'es del traslape de la cubierta;
+    \item una \textbf{componente conexa grande} sugiere continuidad global o una partici\'on m\'as permisiva;
+    \item varias \textbf{componentes desconectadas} sugieren subgrupos locales m\'as compactos o criterios de densidad m\'as estrictos.
+\end{itemize}
+
+Desde una perspectiva topológica, los resultados sugieren que la estructura del espacio químico no es completamente homogénea. La presencia de múltiples componentes en la versión con DBSCAN indica la existencia de regiones localmente densas separadas por zonas de baja conectividad, mientras que la versión aglomerativa sugiere que estas regiones pueden conectarse mediante transiciones graduales cuando se fuerza una partición global.
+
+Esto es consistente con la idea de que el espacio molecular presenta tanto continuidad estructural como zonas de especialización, dependiendo de la resolución a la que se observe.
+
+\subsection{An\'alisis de nodos}
+
+En la versi\'on KeplerMapper, algunos nodos destacados por tama\~no fueron:
+
+\begin{itemize}
+    \item \texttt{cube0\_cluster0}: $283$ mol\'eculas.
+    \item \texttt{cube2\_cluster1}: $82$ mol\'eculas.
+    \item \texttt{cube1\_cluster4}: $81$ mol\'eculas.
+    \item \texttt{cube1\_cluster8}: $57$ mol\'eculas.
+    \item \texttt{cube0\_cluster1}: $55$ mol\'eculas.
+\end{itemize}
+
+Estos nodos muestran que la distribuci\'on de tama\~nos no es homog\'enea: existe al menos un grupo muy dominante y varios grupos medianos. Esto sugiere que una parte importante del conjunto est\'a concentrada en regiones relativamente densas del espacio estructural, mientras que otras zonas contienen subconjuntos m\'as especializados o m\'as dispersos.
+
+
+Aunque no se realizó una caracterización química detallada, el tamaño de los nodos sugiere la existencia de regiones del espacio estructural donde múltiples moléculas comparten patrones comunes, mientras que otros nodos más pequeños podrían corresponder a estructuras menos frecuentes o más especializadas.
+
+%------------------------------------------------
+\section{Identificaci\'on de subgrupos}
+
+La comparaci\'on entre m\'etodos permite identificar dos escalas distintas de subagrupamiento:
+
+\begin{itemize}
+    \item una \textbf{escala global}, bien representada por el Mapper manual con clustering aglomerativo, donde el conjunto aparece como una red conectada;
+    \item una \textbf{escala local}, mejor representada por la versi\'on manual con DBSCAN, donde emergen varias componentes separadas que pueden interpretarse como subgrupos estructuralmente compactos.
+\end{itemize}
+
+Desde este punto de vista, no es necesario escoger una sola lectura como ``la correcta''. M\'as bien, ambas versiones describen propiedades complementarias del mismo espacio m\'etrico:
+
+\begin{itemize}
+    \item la versi\'on aglomerativa resalta continuidad;
+    \item la versi\'on DBSCAN resalta separaci\'on local;
+    \item KeplerMapper aporta un nivel adicional de detalle para exploraci\'on visual.
+\end{itemize}
+
+Esta observaci\'on es particularmente importante en un problema molecular, donde la noci\'on de cercan\'ia entre observaciones depende de decisiones de representaci\'on y m\'etrica, y donde el an\'alisis topol\'ogico se usa precisamente para estudiar c\'omo cambian las conclusiones al modificar la resoluci\'on o el criterio de agrupamiento.
+
+%------------------------------------------------
+\section{Conclusiones}
+
+\section{Conclusiones}
+
+El uso de MAPPER en este trabajo permitió entender mejor cómo se organiza el espacio químico definido por la similitud Weisfeiler--Lehman. Más que dar un solo resultado, el algoritmo dejó ver que hay varias formas de “leer” el mismo conjunto de datos dependiendo de las decisiones que se toman en el pipeline.
+
+En particular, usar excentricidad como función filtro ayudó a ordenar las moléculas desde las más centrales hasta las más perifericas. Esto sirvió como base para construir la cubierta y aplicar MAPPER de una forma que tiene sentido con la geometría del problema.
+
+Un punto clave es que la topología que se obtiene cambia bastante según el método de clustering. El clustering aglomerativo tiende a conectar todo y sugiere una estructura más continua del espacio químico. En cambio, DBSCAN es más estricto y solo agrupa donde hay densidad clara, lo que genera una estructura más fragmentada con varias componentes.
+
+Esto no es una contradicción. Más bien indica que el espacio molecular tiene estructura a distintas escalas. Dependiendo de cómo se mire, se pueden ver tanto conexiones globales como subgrupos más compactos.
+
+También se vio que al usar KeplerMapper, donde el clustering se hace sobre la proyección UMAP, la forma del grafo cambia. Esto refuerza la idea de que el resultado de MAPPER no es único, sino que depende directamente de cómo se construye todo el proceso.
+
+En conjunto, el ejercicio sirvió para entender mejor cómo interactúan la métrica, el filtro, la cubierta y el clustering. No se trata solo de obtener un grafo, sino de ver cómo cambian las conclusiones cuando se modifican estas decisiones.
+
+Como siguiente paso, seria interesante agregar información adicional de las moléculas para poder interpretar mejor los nodos, no solo como grupos estructurales sino tambien en términos más químicos.
+\end{document}
